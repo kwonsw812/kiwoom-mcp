@@ -117,15 +117,16 @@ class TokenManager {
 class KiwoomApiClient {
   private tokenManager = new TokenManager();
 
-  private async request(path: string, body: Record<string, unknown> = {}) {
+  private async request(path: string, apiId: string, body: Record<string, unknown> = {}) {
     const doRequest = async () => {
       const token = await this.tokenManager.getToken();
       const res = await axios.post(`${BASE_URL}${path}`, body, {
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/json;charset=UTF-8",
           Authorization: `Bearer ${token}`,
           appkey: APP_KEY,
-          secretkey: SECRET_KEY, // 키움 REST API는 매 요청에 appkey/secretkey 필요
+          secretkey: SECRET_KEY,
+          "api-id": apiId,
         },
       });
       return res.data;
@@ -144,30 +145,27 @@ class KiwoomApiClient {
   }
 
   async getAccountBalance(accountNo: string) {
-    return this.request("/api/dostk/acnt", {
-      trcode: "ka10085",
+    return this.request("/api/dostk/acnt", "ka10085", {
       acc_no: accountNo,
-      cost_icdc: "1",
+      stex_tp: "0",
     });
   }
 
   async getDeposit(accountNo: string) {
-    return this.request("/api/dostk/acnt", {
-      trcode: "ka10072",
+    return this.request("/api/dostk/acnt", "ka10072", {
       acc_no: accountNo,
+      strt_dt: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
     });
   }
 
   async getStockPrice(stockCode: string) {
-    return this.request("/api/dostk/stkinfo", {
-      trcode: "ka10001",
+    return this.request("/api/dostk/stkinfo", "ka10001", {
       stk_cd: stockCode,
     });
   }
 
   async getStockChart(stockCode: string, startDate: string, endDate: string) {
-    return this.request("/api/dostk/chart", {
-      trcode: "ka10002",
+    return this.request("/api/dostk/chart", "ka10002", {
       stk_cd: stockCode,
       start_dt: startDate,
       end_dt: endDate,
@@ -175,14 +173,13 @@ class KiwoomApiClient {
   }
 
   async searchStockCode(keyword: string) {
-    return this.request("/api/dostk/stkinfo", {
-      trcode: "ka10004",
+    return this.request("/api/dostk/stkinfo", "ka10004", {
       keyword,
     });
   }
 
   async placeOrder(
-    trcode: string,
+    apiId: string,
     accountNo: string,
     stockCode: string,
     quantity: number,
@@ -190,8 +187,7 @@ class KiwoomApiClient {
     orderType: string
   ) {
     const priceType = orderType === "market" ? "03" : "00";
-    return this.request("/api/dostk/order", {
-      trcode,
+    return this.request("/api/dostk/order", apiId, {
       acc_no: accountNo,
       stk_cd: stockCode,
       qty: quantity,
@@ -201,8 +197,7 @@ class KiwoomApiClient {
   }
 
   async getUnfilledOrders(accountNo: string) {
-    return this.request("/api/dostk/acnt", {
-      trcode: "ka10075",
+    return this.request("/api/dostk/acnt", "ka10075", {
       acc_no: accountNo,
     });
   }
@@ -213,8 +208,7 @@ class KiwoomApiClient {
     stockCode: string,
     quantity: number
   ) {
-    return this.request("/api/dostk/order", {
-      trcode: "kt10003",
+    return this.request("/api/dostk/order", "kt10003", {
       acc_no: accountNo,
       org_ord_no: originalOrderNo,
       stk_cd: stockCode,
@@ -227,8 +221,7 @@ class KiwoomApiClient {
     startDate: string,
     endDate: string
   ) {
-    return this.request("/api/dostk/acnt", {
-      trcode: "ka10170",
+    return this.request("/api/dostk/acnt", "ka10170", {
       acc_no: accountNo,
       start_dt: startDate,
       end_dt: endDate,
@@ -270,27 +263,20 @@ function extractStockFields(item: Record<string, unknown>) {
 }
 
 function formatBalance(data: Record<string, unknown>): string {
-  const output = data.output as Record<string, unknown>[] | undefined;
-  const output2 = data.output2 as Record<string, unknown> | undefined;
+  const items = (data.acnt_prft_rt ?? data.output) as Record<string, unknown>[] | undefined;
 
   let result = "## 계좌 잔고\n\n";
 
-  if (output2) {
-    const totalEval = output2.tot_eval_amt ?? output2.total_eval_amt ?? "-";
-    const totalProfit = output2.tot_pl_amt ?? output2.total_profit_loss ?? "-";
-    const profitRate = output2.tot_pl_rate ?? output2.total_profit_rate ?? "-";
-
-    result += `- 총평가금액: ${formatCurrency(totalEval)}\n`;
-    result += `- 총손익: ${formatCurrency(totalProfit)}\n`;
-    result += `- 수익률: ${formatPercent(profitRate)}\n\n`;
-  }
-
-  if (output && output.length > 0) {
-    result += "| 종목명 | 보유수량 | 현재가 | 평가금액 | 손익률 |\n";
-    result += "|--------|---------|--------|---------|--------|\n";
-    for (const item of output) {
-      const s = extractStockFields(item);
-      result += `| ${s.name} | ${s.qty} | ${formatCurrency(s.curPrice)} | ${formatCurrency(s.evalAmt)} | ${formatPercent(s.plRate)} |\n`;
+  if (items && items.length > 0) {
+    result += "| 종목명 | 종목코드 | 보유수량 | 현재가 | 매입금액 |\n";
+    result += "|--------|---------|---------|--------|----------|\n";
+    for (const item of items) {
+      const name = item.stk_nm ?? "-";
+      const code = item.stk_cd ?? "-";
+      const qty = item.rmnd_qty ?? item.hold_qty ?? "-";
+      const price = item.cur_prc ?? item.cur_pr ?? "-";
+      const purAmt = item.pur_amt ?? "-";
+      result += `| ${name} | ${code} | ${qty} | ${formatCurrency(price)} | ${formatCurrency(purAmt)} |\n`;
     }
   } else {
     result += "보유 종목이 없습니다.\n";
@@ -345,25 +331,25 @@ function formatPortfolioSummary(data: Record<string, unknown>): string {
 function formatStockPrice(data: Record<string, unknown>): string {
   const o = (data.output ?? data) as Record<string, unknown>;
 
-  const name = o.stk_nm ?? o.stock_name ?? "-";
-  const price = o.cur_pr ?? o.current_price ?? "-";
-  const change = o.change_amt ?? o.change ?? "-";
-  const changeRate = o.change_rate ?? o.pct_change ?? "-";
-  const volume = o.volume ?? o.trd_vol ?? "-";
-  const high52 = o.high_52w ?? o.year_high ?? "-";
-  const low52 = o.low_52w ?? o.year_low ?? "-";
+  const name = o.stk_nm ?? "-";
+  const code = o.stk_cd ?? "-";
+  const price = o.cur_prc ?? o.cur_pr ?? "-";
+  const change = o.pred_pre ?? o.change_amt ?? "-";
+  const high = o.high_pric ?? "-";
+  const low = o.low_pric ?? "-";
+  const open = o.open_pric ?? "-";
+  const high250 = o["250hgst"] ?? o.oyr_hgst ?? "-";
+  const low250 = o["250lwst"] ?? o.oyr_lwst ?? "-";
   const per = o.per ?? "-";
   const pbr = o.pbr ?? "-";
+  const eps = o.eps ?? "-";
 
-  let result = `## ${name} 현재가 정보\n\n`;
+  let result = `## ${name} (${code}) 현재가 정보\n\n`;
   result += `- 현재가: ${formatCurrency(price)}\n`;
-  result += `- 전일대비: ${formatCurrency(change)} (${formatPercent(changeRate)})\n`;
-  result += `- 거래량: ${formatVolume(volume)}주\n`;
-  result += `- 52주 최고: ${formatCurrency(high52)}\n`;
-  result += `- 52주 최저: ${formatCurrency(low52)}\n`;
-  if (per !== "-" || pbr !== "-") {
-    result += `- PER: ${per} / PBR: ${pbr}\n`;
-  }
+  result += `- 전일대비: ${formatCurrency(change)}\n`;
+  result += `- 시가: ${formatCurrency(open)} / 고가: ${formatCurrency(high)} / 저가: ${formatCurrency(low)}\n`;
+  result += `- 250일 최고: ${formatCurrency(high250)} / 최저: ${formatCurrency(low250)}\n`;
+  result += `- PER: ${per} / PBR: ${pbr} / EPS: ${eps}\n`;
 
   return result;
 }
@@ -860,7 +846,7 @@ async function main() {
       });
       res.on("close", () => transport.close());
       await server.connect(transport);
-      await transport.handleRequest(req, res);
+      await transport.handleRequest(req, res, req.body);
     });
 
     app.get("/mcp", async (req, res) => {

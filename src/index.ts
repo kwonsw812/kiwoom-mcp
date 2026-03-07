@@ -64,6 +64,10 @@ function resolveAccountNo(accountNo?: string): string {
   return acct;
 }
 
+function today(): string {
+  return new Date().toISOString().slice(0, 10).replace(/-/g, "");
+}
+
 // ─── TokenManager ───────────────────────────────────────────
 
 class TokenManager {
@@ -104,7 +108,6 @@ class TokenManager {
 
     this.token = res.data.token;
     const expiresIn = res.data.expires_in;
-    // 서버 응답의 expires_in 사용, 없으면 23시간 (24h 만료 - 1h 여유)
     this.expiresAt = expiresIn
       ? Date.now() + (expiresIn - 3600) * 1000
       : Date.now() + 23 * 60 * 60 * 1000;
@@ -135,7 +138,6 @@ class KiwoomApiClient {
     try {
       return await doRequest();
     } catch (error) {
-      // 401 시 토큰 무효화 후 1회 재시도
       if (error instanceof AxiosError && error.response?.status === 401) {
         this.tokenManager.invalidate();
         return await doRequest();
@@ -144,6 +146,8 @@ class KiwoomApiClient {
     }
   }
 
+  // 계좌수익률요청 (ka10085) - 보유종목 목록
+  // URL: /api/dostk/acnt | 필수: stex_tp
   async getAccountBalance(accountNo: string) {
     return this.request("/api/dostk/acnt", "ka10085", {
       acc_no: accountNo,
@@ -151,80 +155,125 @@ class KiwoomApiClient {
     });
   }
 
-  async getDeposit(accountNo: string) {
-    return this.request("/api/dostk/acnt", "ka10072", {
+  // 계좌평가잔고내역요청 (kt00018) - 평가손익 포함 잔고
+  // URL: /api/dostk/acnt | 필수: qry_tp, dmst_stex_tp
+  async getAccountEvaluation(accountNo: string) {
+    return this.request("/api/dostk/acnt", "kt00018", {
       acc_no: accountNo,
-      strt_dt: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
+      qry_tp: "1",
+      dmst_stex_tp: "KRX",
     });
   }
 
+  // 예수금상세현황요청 (kt00001)
+  // URL: /api/dostk/acnt | 필수: qry_tp (2:일반조회, 3:추정조회)
+  async getDeposit(accountNo: string) {
+    return this.request("/api/dostk/acnt", "kt00001", {
+      acc_no: accountNo,
+      qry_tp: "2",
+    });
+  }
+
+  // 주식기본정보요청 (ka10001)
+  // URL: /api/dostk/stkinfo | 필수: stk_cd
   async getStockPrice(stockCode: string) {
     return this.request("/api/dostk/stkinfo", "ka10001", {
       stk_cd: stockCode,
     });
   }
 
-  async getStockChart(stockCode: string, startDate: string, endDate: string) {
-    return this.request("/api/dostk/chart", "ka10002", {
+  // 주식일봉차트조회요청 (ka10081)
+  // URL: /api/dostk/chart | 필수: stk_cd, base_dt, upd_stkpc_tp
+  async getStockChart(stockCode: string, baseDate: string) {
+    return this.request("/api/dostk/chart", "ka10081", {
       stk_cd: stockCode,
-      start_dt: startDate,
-      end_dt: endDate,
+      base_dt: baseDate,
+      upd_stkpc_tp: "1",
     });
   }
 
-  async searchStockCode(keyword: string) {
-    return this.request("/api/dostk/stkinfo", "ka10004", {
-      keyword,
+  // 종목정보 리스트 (ka10099) - 시장별 전체 종목 리스트
+  // URL: /api/dostk/stkinfo | 필수: mrkt_tp (0:코스피, 10:코스닥)
+  async getStockList(marketType: string) {
+    return this.request("/api/dostk/stkinfo", "ka10099", {
+      mrkt_tp: marketType,
     });
   }
 
-  async placeOrder(
-    apiId: string,
-    accountNo: string,
-    stockCode: string,
-    quantity: number,
-    price: number,
-    orderType: string
-  ) {
-    const priceType = orderType === "market" ? "03" : "00";
-    return this.request("/api/dostk/order", apiId, {
-      acc_no: accountNo,
+  // 종목정보 조회 (ka10100) - 종목코드로 종목 상세 조회
+  // URL: /api/dostk/stkinfo | 필수: stk_cd
+  async getStockInfo(stockCode: string) {
+    return this.request("/api/dostk/stkinfo", "ka10100", {
       stk_cd: stockCode,
-      qty: quantity,
-      price: orderType === "market" ? 0 : price,
-      price_type: priceType,
     });
   }
 
+  // 미체결요청 (ka10075)
+  // URL: /api/dostk/acnt | 필수: all_stk_tp, trde_tp, stex_tp
   async getUnfilledOrders(accountNo: string) {
     return this.request("/api/dostk/acnt", "ka10075", {
       acc_no: accountNo,
+      all_stk_tp: "0",
+      trde_tp: "0",
+      stex_tp: "0",
     });
   }
 
-  async cancelOrder(
-    accountNo: string,
-    originalOrderNo: string,
-    stockCode: string,
-    quantity: number
-  ) {
-    return this.request("/api/dostk/order", "kt10003", {
-      acc_no: accountNo,
-      org_ord_no: originalOrderNo,
-      stk_cd: stockCode,
-      qty: quantity,
-    });
-  }
-
-  async getTradeHistory(
-    accountNo: string,
-    startDate: string,
-    endDate: string
-  ) {
+  // 당일매매일지요청 (ka10170) - 당일 매매 내역
+  // URL: /api/dostk/acnt | 필수: ottks_tp, ch_crd_tp | 선택: base_dt
+  async getTradeHistory(accountNo: string, baseDate?: string) {
     return this.request("/api/dostk/acnt", "ka10170", {
       acc_no: accountNo,
-      start_dt: startDate,
-      end_dt: endDate,
+      base_dt: baseDate ?? today(),
+      ottks_tp: "2",
+      ch_crd_tp: "0",
+    });
+  }
+
+  // 주식 매수주문 (kt10000)
+  // URL: /api/dostk/ordr | 필수: dmst_stex_tp, stk_cd, ord_qty, trde_tp
+  // trde_tp: 0:보통(지정가), 3:시장가
+  async placeBuyOrder(accountNo: string, stockCode: string, quantity: number, price: number, orderType: string) {
+    const trde_tp = orderType === "market" ? "3" : "0";
+    const body: Record<string, unknown> = {
+      acc_no: accountNo,
+      dmst_stex_tp: "KRX",
+      stk_cd: stockCode,
+      ord_qty: String(quantity),
+      trde_tp,
+    };
+    if (orderType === "limit") {
+      body.ord_uv = String(price);
+    }
+    return this.request("/api/dostk/ordr", "kt10000", body);
+  }
+
+  // 주식 매도주문 (kt10001)
+  // URL: /api/dostk/ordr | 필수: dmst_stex_tp, stk_cd, ord_qty, trde_tp
+  async placeSellOrder(accountNo: string, stockCode: string, quantity: number, price: number, orderType: string) {
+    const trde_tp = orderType === "market" ? "3" : "0";
+    const body: Record<string, unknown> = {
+      acc_no: accountNo,
+      dmst_stex_tp: "KRX",
+      stk_cd: stockCode,
+      ord_qty: String(quantity),
+      trde_tp,
+    };
+    if (orderType === "limit") {
+      body.ord_uv = String(price);
+    }
+    return this.request("/api/dostk/ordr", "kt10001", body);
+  }
+
+  // 주식 취소주문 (kt10003)
+  // URL: /api/dostk/ordr | 필수: dmst_stex_tp, orig_ord_no, stk_cd, cncl_qty
+  async cancelOrder(accountNo: string, origOrdNo: string, stockCode: string, quantity: number) {
+    return this.request("/api/dostk/ordr", "kt10003", {
+      acc_no: accountNo,
+      dmst_stex_tp: "KRX",
+      orig_ord_no: origOrdNo,
+      stk_cd: stockCode,
+      cncl_qty: String(quantity),
     });
   }
 }
@@ -232,7 +281,8 @@ class KiwoomApiClient {
 // ─── 포맷팅 헬퍼 ────────────────────────────────────────────
 
 function formatCurrency(value: number | string | unknown): string {
-  const num = Number(value);
+  const str = String(value).replace(/[+]/g, "");
+  const num = Number(str);
   if (isNaN(num)) return String(value);
   return Math.round(num).toLocaleString("ko-KR") + "원";
 }
@@ -250,99 +300,93 @@ function formatVolume(value: unknown): string {
   return num.toLocaleString("ko-KR");
 }
 
-function extractStockFields(item: Record<string, unknown>) {
-  return {
-    name: item.stk_nm ?? item.stock_name ?? "-",
-    code: item.stk_cd ?? item.stock_code ?? "-",
-    qty: item.hold_qty ?? item.quantity ?? "-",
-    curPrice: item.cur_pr ?? item.current_price ?? "-",
-    evalAmt: item.eval_amt ?? item.eval_amount ?? 0,
-    plAmt: item.pl_amt ?? item.profit_loss ?? 0,
-    plRate: item.pl_rate ?? item.profit_rate ?? "-",
-  };
-}
+// ─── 포맷팅 함수 ────────────────────────────────────────────
 
+// ka10085 응답: acnt_prft_rt 배열
+// 필드: stk_cd, stk_nm, cur_prc, pur_pric, pur_amt, rmnd_qty, tdy_sel_pl
 function formatBalance(data: Record<string, unknown>): string {
-  const items = (data.acnt_prft_rt ?? data.output) as Record<string, unknown>[] | undefined;
+  const items = data.acnt_prft_rt as Record<string, unknown>[] | undefined;
 
-  let result = "## 계좌 잔고\n\n";
+  let result = "## 계좌 잔고 (보유종목)\n\n";
 
-  if (items && items.length > 0) {
-    result += "| 종목명 | 종목코드 | 보유수량 | 현재가 | 매입금액 |\n";
-    result += "|--------|---------|---------|--------|----------|\n";
-    for (const item of items) {
-      const name = item.stk_nm ?? "-";
-      const code = item.stk_cd ?? "-";
-      const qty = item.rmnd_qty ?? item.hold_qty ?? "-";
-      const price = item.cur_prc ?? item.cur_pr ?? "-";
-      const purAmt = item.pur_amt ?? "-";
-      result += `| ${name} | ${code} | ${qty} | ${formatCurrency(price)} | ${formatCurrency(purAmt)} |\n`;
-    }
-  } else {
-    result += "보유 종목이 없습니다.\n";
-  }
-
-  return result;
-}
-
-function formatPortfolioSummary(data: Record<string, unknown>): string {
-  const output = data.output as Record<string, unknown>[] | undefined;
-  const output2 = data.output2 as Record<string, unknown> | undefined;
-
-  let result = "## 포트폴리오 분석\n\n";
-
-  if (!output || output.length === 0) {
+  if (!items || items.length === 0) {
     return result + "보유 종목이 없습니다.\n";
   }
 
-  const totalEval = output2
-    ? Number(output2.tot_eval_amt ?? output2.total_eval_amt ?? 0)
-    : 0;
-
-  result += "| 종목명 | 비중 | 평가금액 | 손익금액 | 수익률 |\n";
-  result += "|--------|------|---------|---------|--------|\n";
-
-  let totalProfit = 0;
-  let profitCount = 0;
-  let lossCount = 0;
-
-  for (const item of output) {
-    const s = extractStockFields(item);
-    const evalAmt = Number(s.evalAmt);
-    const plAmt = Number(s.plAmt);
-    const weight =
-      totalEval > 0 ? ((evalAmt / totalEval) * 100).toFixed(1) + "%" : "-";
-
-    if (plAmt >= 0) profitCount++;
-    else lossCount++;
-    totalProfit += plAmt;
-
-    result += `| ${s.name} | ${weight} | ${formatCurrency(evalAmt)} | ${formatCurrency(plAmt)} | ${formatPercent(s.plRate)} |\n`;
+  result += "| 종목명 | 종목코드 | 보유수량 | 현재가 | 매입가 | 매입금액 | 당일매도손익 |\n";
+  result += "|--------|---------|---------|--------|--------|---------|-------------|\n";
+  for (const item of items) {
+    const name = item.stk_nm ?? "-";
+    const code = item.stk_cd ?? "-";
+    const qty = item.rmnd_qty ?? "-";
+    const curPrc = item.cur_prc ?? "-";
+    const purPric = item.pur_pric ?? "-";
+    const purAmt = item.pur_amt ?? "-";
+    const selPl = item.tdy_sel_pl ?? "0";
+    result += `| ${name} | ${code} | ${qty} | ${formatCurrency(curPrc)} | ${formatCurrency(purPric)} | ${formatCurrency(purAmt)} | ${formatCurrency(selPl)} |\n`;
   }
-
-  result += `\n### 요약\n`;
-  result += `- 총 보유종목: ${output.length}개\n`;
-  result += `- 수익 종목: ${profitCount}개 / 손실 종목: ${lossCount}개\n`;
-  result += `- 총 평가손익: ${formatCurrency(totalProfit)}\n`;
 
   return result;
 }
 
-function formatStockPrice(data: Record<string, unknown>): string {
-  const o = (data.output ?? data) as Record<string, unknown>;
+// kt00018 응답: tot_pur_amt, tot_evlt_amt, tot_evlt_pl, tot_prft_rt + acnt_evlt_remn_indv_tot 배열
+// 필드: stk_cd, stk_nm, cur_prc, pur_pric, rmnd_qty, evltv_prft, prft_rt
+function formatPortfolioSummary(data: Record<string, unknown>): string {
+  const items = data.acnt_evlt_remn_indv_tot as Record<string, unknown>[] | undefined;
 
-  const name = o.stk_nm ?? "-";
-  const code = o.stk_cd ?? "-";
-  const price = o.cur_prc ?? o.cur_pr ?? "-";
-  const change = o.pred_pre ?? o.change_amt ?? "-";
-  const high = o.high_pric ?? "-";
-  const low = o.low_pric ?? "-";
-  const open = o.open_pric ?? "-";
-  const high250 = o["250hgst"] ?? o.oyr_hgst ?? "-";
-  const low250 = o["250lwst"] ?? o.oyr_lwst ?? "-";
-  const per = o.per ?? "-";
-  const pbr = o.pbr ?? "-";
-  const eps = o.eps ?? "-";
+  let result = "## 포트폴리오 분석\n\n";
+
+  result += `- 총매입금액: ${formatCurrency(data.tot_pur_amt ?? "-")}\n`;
+  result += `- 총평가금액: ${formatCurrency(data.tot_evlt_amt ?? "-")}\n`;
+  result += `- 총평가손익: ${formatCurrency(data.tot_evlt_pl ?? "-")}\n`;
+  result += `- 총수익률: ${data.tot_prft_rt ?? "-"}%\n`;
+  result += `- 추정예탁자산: ${formatCurrency(data.prsm_dpst_aset_amt ?? "-")}\n\n`;
+
+  if (!items || items.length === 0) {
+    return result + "보유 종목이 없습니다.\n";
+  }
+
+  result += "| 종목명 | 종목코드 | 보유수량 | 현재가 | 매입가 | 평가손익 | 수익률 |\n";
+  result += "|--------|---------|---------|--------|--------|---------|--------|\n";
+  for (const item of items) {
+    const name = item.stk_nm ?? "-";
+    const code = item.stk_cd ?? "-";
+    const qty = item.rmnd_qty ?? "-";
+    const curPrc = item.cur_prc ?? "-";
+    const purPric = item.pur_pric ?? "-";
+    const evltvPrft = item.evltv_prft ?? "-";
+    const prftRt = item.prft_rt ?? "-";
+    result += `| ${name} | ${code} | ${qty} | ${formatCurrency(curPrc)} | ${formatCurrency(purPric)} | ${formatCurrency(evltvPrft)} | ${prftRt}% |\n`;
+  }
+
+  return result;
+}
+
+// kt00001 응답: entr(예수금), profa_ch(주식증거금현금) 등
+function formatDeposit(data: Record<string, unknown>): string {
+  let result = "## 예수금 상세\n\n";
+  result += `- 예수금: ${formatCurrency(data.entr ?? "-")}\n`;
+  result += `- 주식증거금(현금): ${formatCurrency(data.profa_ch ?? "-")}\n`;
+  result += `- 신용보증금(현금): ${formatCurrency(data.crd_grnta_ch ?? "-")}\n`;
+  result += `- 미수확보금: ${formatCurrency(data.uncl_stk_amt ?? "-")}\n`;
+  return result;
+}
+
+// ka10001 응답: 최상위 필드로 바로 옴
+// 필드: stk_nm, cur_prc, pred_pre, open_pric, high_pric, low_pric, 250hgst, 250lwst, per, pbr, eps
+function formatStockPrice(data: Record<string, unknown>): string {
+  const name = data.stk_nm ?? "-";
+  const code = data.stk_cd ?? "-";
+  const price = data.cur_prc ?? "-";
+  const change = data.pred_pre ?? "-";
+  const open = data.open_pric ?? "-";
+  const high = data.high_pric ?? "-";
+  const low = data.low_pric ?? "-";
+  const high250 = data["250hgst"] ?? data.oyr_hgst ?? "-";
+  const low250 = data["250lwst"] ?? data.oyr_lwst ?? "-";
+  const per = data.per ?? "-";
+  const pbr = data.pbr ?? "-";
+  const eps = data.eps ?? "-";
 
   let result = `## ${name} (${code}) 현재가 정보\n\n`;
   result += `- 현재가: ${formatCurrency(price)}\n`;
@@ -354,26 +398,87 @@ function formatStockPrice(data: Record<string, unknown>): string {
   return result;
 }
 
+// ka10081 응답: stk_dt_pole_chart_qry 배열
+// 필드: dt, cur_prc(종가), open_pric, high_pric, low_pric, trde_qty, pred_pre
 function formatChartData(data: Record<string, unknown>): string {
-  const output = data.output as Record<string, unknown>[] | undefined;
+  const items = data.stk_dt_pole_chart_qry as Record<string, unknown>[] | undefined;
 
-  let result = "## 차트 데이터 (일봉)\n\n";
+  let result = "## 일봉 차트 데이터\n\n";
 
-  if (!output || output.length === 0) {
+  if (!items || items.length === 0) {
     return result + "데이터가 없습니다.\n";
   }
 
   result += "| 날짜 | 시가 | 고가 | 저가 | 종가 | 거래량 |\n";
   result += "|------|------|------|------|------|--------|\n";
 
-  for (const item of output) {
-    const date = item.date ?? item.trd_dt ?? "-";
-    const open = item.open ?? item.open_pr ?? "-";
-    const high = item.high ?? item.high_pr ?? "-";
-    const low = item.low ?? item.low_pr ?? "-";
-    const close = item.close ?? item.close_pr ?? "-";
-    const vol = item.volume ?? item.trd_vol ?? "-";
-    result += `| ${date} | ${formatCurrency(open)} | ${formatCurrency(high)} | ${formatCurrency(low)} | ${formatCurrency(close)} | ${formatVolume(vol)} |\n`;
+  for (const item of items) {
+    const dt = item.dt ?? "-";
+    const open = item.open_pric ?? "-";
+    const high = item.high_pric ?? "-";
+    const low = item.low_pric ?? "-";
+    const close = item.cur_prc ?? "-";
+    const vol = item.trde_qty ?? "-";
+    result += `| ${dt} | ${formatCurrency(open)} | ${formatCurrency(high)} | ${formatCurrency(low)} | ${formatCurrency(close)} | ${formatVolume(vol)} |\n`;
+  }
+
+  return result;
+}
+
+// ka10075 응답: oso 배열
+// 필드: ord_no, stk_nm, stk_cd, ord_qty, ord_pric, tsk_tp(업무구분), ord_stt(주문상태)
+function formatUnfilledOrders(data: Record<string, unknown>): string {
+  const items = data.oso as Record<string, unknown>[] | undefined;
+
+  let result = "## 미체결 주문 목록\n\n";
+
+  if (!items || items.length === 0) {
+    return result + "미체결 주문이 없습니다.\n";
+  }
+
+  result += "| 주문번호 | 종목명 | 종목코드 | 주문수량 | 주문가격 | 주문상태 |\n";
+  result += "|---------|--------|---------|---------|---------|--------|\n";
+  for (const item of items) {
+    const ordNo = item.ord_no ?? "-";
+    const name = item.stk_nm ?? "-";
+    const code = item.stk_cd ?? "-";
+    const qty = item.ord_qty ?? "-";
+    const prc = item.ord_pric ?? "-";
+    const stt = item.ord_stt ?? "-";
+    result += `| ${ordNo} | ${name} | ${code} | ${qty} | ${formatCurrency(prc)} | ${stt} |\n`;
+  }
+
+  return result;
+}
+
+// ka10170 응답: tot_sell_amt, tot_buy_amt, tot_pl_amt, tot_prft_rt + tdy_trde_diary 배열
+// 필드: stk_nm, buy_avg_pric, buy_qty, sel_avg_pric, sell_qty, pl_amt, prft_rt
+function formatTradeHistory(data: Record<string, unknown>): string {
+  let result = "## 당일 매매일지\n\n";
+
+  result += `- 총매도금액: ${formatCurrency(data.tot_sell_amt ?? "-")}\n`;
+  result += `- 총매수금액: ${formatCurrency(data.tot_buy_amt ?? "-")}\n`;
+  result += `- 총손익금액: ${formatCurrency(data.tot_pl_amt ?? "-")}\n`;
+  result += `- 총수익률: ${data.tot_prft_rt ?? "-"}%\n\n`;
+
+  const items = data.tdy_trde_diary as Record<string, unknown>[] | undefined;
+
+  if (!items || items.length === 0 || !items[0].stk_nm) {
+    return result + "당일 매매 내역이 없습니다.\n";
+  }
+
+  result += "| 종목명 | 매수평균가 | 매수수량 | 매도평균가 | 매도수량 | 손익금액 | 수익률 |\n";
+  result += "|--------|---------|---------|---------|---------|---------|--------|\n";
+  for (const item of items) {
+    if (!item.stk_nm) continue;
+    const name = item.stk_nm ?? "-";
+    const buyAvg = item.buy_avg_pric ?? "-";
+    const buyQty = item.buy_qty ?? "-";
+    const selAvg = item.sel_avg_pric ?? "-";
+    const selQty = item.sell_qty ?? "-";
+    const plAmt = item.pl_amt ?? "-";
+    const prftRt = item.prft_rt ?? "-";
+    result += `| ${name} | ${formatCurrency(buyAvg)} | ${buyQty} | ${formatCurrency(selAvg)} | ${selQty} | ${formatCurrency(plAmt)} | ${prftRt}% |\n`;
   }
 
   return result;
@@ -382,10 +487,8 @@ function formatChartData(data: Record<string, unknown>): string {
 function formatError(error: unknown): string {
   if (error instanceof AxiosError) {
     const status = error.response?.status ?? "N/A";
-    const msg =
-      error.response?.data?.message ??
-      error.response?.data?.msg ??
-      error.message;
+    const data = error.response?.data;
+    const msg = data?.return_msg ?? data?.message ?? error.message;
     return `API 오류 (HTTP ${status}): ${msg}`;
   }
   if (error instanceof Error) {
@@ -403,12 +506,12 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-// ─── 조회 Tools (readOnlyHint: true) ────────────────────────
+// ─── 조회 Tools ─────────────────────────────────────────────
 
-// 1. get_account_balance
+// 1. get_account_balance - 보유종목 + 현재가/매입가 (ka10085)
 server.tool(
   "get_account_balance",
-  "보유 주식 목록, 평가금액, 수익률 등 계좌 잔고를 조회합니다",
+  "보유 주식 목록, 현재가, 매입가, 매입금액 등 계좌 잔고를 조회합니다",
   { account_no: accountNoSchema },
   { readOnlyHint: true },
   async ({ account_no }) => {
@@ -422,16 +525,16 @@ server.tool(
   }
 );
 
-// 2. get_portfolio_summary
+// 2. get_portfolio_summary - 평가손익 포함 포트폴리오 (kt00018)
 server.tool(
   "get_portfolio_summary",
-  "종목별 비중, 손익 분석 등 포트폴리오를 요약 분석합니다",
+  "총평가금액, 총손익, 수익률 등 포트폴리오 전체 현황을 분석합니다",
   { account_no: accountNoSchema },
   { readOnlyHint: true },
   async ({ account_no }) => {
     try {
       const acct = resolveAccountNo(account_no);
-      const data = await client.getAccountBalance(acct);
+      const data = await client.getAccountEvaluation(acct);
       return textContent(formatPortfolioSummary(data));
     } catch (error) {
       return errorContent(formatError(error));
@@ -439,34 +542,27 @@ server.tool(
   }
 );
 
-// 3. get_deposit_detail
+// 3. get_deposit_detail - 예수금 상세 (kt00001)
 server.tool(
   "get_deposit_detail",
-  "예수금, 출금가능금액, 주문가능금액 등 예수금 상세를 조회합니다",
+  "예수금, 증거금, 미수확보금 등 예수금 상세를 조회합니다",
   { account_no: accountNoSchema },
   { readOnlyHint: true },
   async ({ account_no }) => {
     try {
       const acct = resolveAccountNo(account_no);
       const data = await client.getDeposit(acct);
-      const o = (data.output ?? data) as Record<string, unknown>;
-
-      let text = "## 예수금 상세\n\n";
-      text += `- 예수금: ${formatCurrency(o.deposit ?? o.dpst_amt ?? "-")}\n`;
-      text += `- 출금가능금액: ${formatCurrency(o.withdrawable ?? o.wdr_able_amt ?? "-")}\n`;
-      text += `- 주문가능금액: ${formatCurrency(o.orderable ?? o.ord_able_amt ?? "-")}\n`;
-
-      return textContent(text);
+      return textContent(formatDeposit(data));
     } catch (error) {
       return errorContent(formatError(error));
     }
   }
 );
 
-// 4. get_stock_price
+// 4. get_stock_price - 주식 현재가 (ka10001)
 server.tool(
   "get_stock_price",
-  "종목의 현재가, 등락률, 거래량, 52주 고저, PER/PBR 등을 조회합니다",
+  "종목의 현재가, 전일대비, 시가/고가/저가, 250일 고저, PER/PBR/EPS를 조회합니다",
   { stock_code: stockCodeSchema },
   { readOnlyHint: true },
   async ({ stock_code }) => {
@@ -479,19 +575,18 @@ server.tool(
   }
 );
 
-// 5. get_stock_chart
+// 5. get_stock_chart - 일봉 차트 (ka10081)
 server.tool(
   "get_stock_chart",
-  "일봉 OHLCV 차트 데이터를 기간 지정하여 조회합니다",
+  "기준일자 기준 일봉 OHLCV 차트 데이터를 조회합니다 (최근 데이터부터 내림차순)",
   {
     stock_code: stockCodeSchema,
-    start_date: dateSchema("시작일"),
-    end_date: dateSchema("종료일"),
+    base_date: dateSchema("기준일자 (이 날짜 이전 데이터 조회)").optional(),
   },
   { readOnlyHint: true },
-  async ({ stock_code, start_date, end_date }) => {
+  async ({ stock_code, base_date }) => {
     try {
-      const data = await client.getStockChart(stock_code, start_date, end_date);
+      const data = await client.getStockChart(stock_code, base_date ?? today());
       return textContent(formatChartData(data));
     } catch (error) {
       return errorContent(formatError(error));
@@ -499,31 +594,24 @@ server.tool(
   }
 );
 
-// 6. search_stock_code
+// 6. search_stock - 종목코드로 종목 정보 조회 (ka10100)
 server.tool(
-  "search_stock_code",
-  "종목명으로 종목코드를 검색합니다 (예: 삼성전자 → 005930)",
-  { keyword: z.string().describe("검색할 종목명 (예: 삼성전자)") },
+  "search_stock",
+  "종목코드로 종목명, 시장구분, 업종, 상장일 등 종목 기본 정보를 조회합니다",
+  { stock_code: stockCodeSchema },
   { readOnlyHint: true },
-  async ({ keyword }) => {
+  async ({ stock_code }) => {
     try {
-      const data = await client.searchStockCode(keyword);
-      const output = data.output as Record<string, unknown>[] | undefined;
-
-      if (!output || output.length === 0) {
-        return textContent(`"${keyword}"에 대한 검색 결과가 없습니다.`);
-      }
-
-      let text = `## "${keyword}" 검색 결과\n\n`;
-      text += "| 종목코드 | 종목명 | 시장 |\n";
-      text += "|---------|--------|------|\n";
-      for (const item of output) {
-        const code = item.stk_cd ?? item.stock_code ?? "-";
-        const name = item.stk_nm ?? item.stock_name ?? "-";
-        const market = item.market ?? item.mkt_nm ?? "-";
-        text += `| ${code} | ${name} | ${market} |\n`;
-      }
-
+      const data = await client.getStockInfo(stock_code);
+      let text = `## 종목 정보\n\n`;
+      text += `- 종목코드: ${data.code ?? stock_code}\n`;
+      text += `- 종목명: ${data.name ?? "-"}\n`;
+      text += `- 시장: ${data.marketName ?? "-"} (${data.marketCode ?? "-"})\n`;
+      text += `- 업종: ${data.upName ?? "-"}\n`;
+      text += `- 상장일: ${data.regDay ?? "-"}\n`;
+      text += `- 전일종가: ${formatCurrency(data.lastPrice ?? "-")}\n`;
+      text += `- 상장주식수: ${Number(data.listCount ?? 0).toLocaleString("ko-KR")}주\n`;
+      text += `- 종목상태: ${data.state ?? "-"}\n`;
       return textContent(text);
     } catch (error) {
       return errorContent(formatError(error));
@@ -531,7 +619,7 @@ server.tool(
   }
 );
 
-// 9. get_unfilled_orders
+// 7. get_unfilled_orders - 미체결 주문 (ka10075)
 server.tool(
   "get_unfilled_orders",
   "미체결 주문 목록을 조회합니다",
@@ -541,288 +629,125 @@ server.tool(
     try {
       const acct = resolveAccountNo(account_no);
       const data = await client.getUnfilledOrders(acct);
-      const output = data.output as Record<string, unknown>[] | undefined;
-
-      if (!output || output.length === 0) {
-        return textContent("미체결 주문이 없습니다.");
-      }
-
-      let text = "## 미체결 주문 목록\n\n";
-      text +=
-        "| 주문번호 | 종목명 | 매매구분 | 주문수량 | 주문가격 | 미체결수량 |\n";
-      text +=
-        "|---------|--------|---------|---------|---------|----------|\n";
-
-      for (const item of output) {
-        const ordNo = item.ord_no ?? item.order_no ?? "-";
-        const name = item.stk_nm ?? item.stock_name ?? "-";
-        const side = item.buy_sell ?? item.side ?? "-";
-        const qty = item.ord_qty ?? item.order_qty ?? "-";
-        const prc = item.ord_pr ?? item.order_price ?? "-";
-        const unfilled = item.unfilled_qty ?? item.rmn_qty ?? "-";
-        text += `| ${ordNo} | ${name} | ${side} | ${qty} | ${formatCurrency(prc)} | ${unfilled} |\n`;
-      }
-
-      return textContent(text);
+      return textContent(formatUnfilledOrders(data));
     } catch (error) {
       return errorContent(formatError(error));
     }
   }
 );
 
-// 11. get_trade_history
+// 8. get_trade_history - 당일 매매일지 (ka10170)
 server.tool(
   "get_trade_history",
-  "기간별 체결 내역 (매수/매도)을 조회합니다",
+  "당일 또는 특정 날짜의 매매일지(매수/매도 내역, 손익)를 조회합니다 (최근 2개월까지)",
   {
-    start_date: dateSchema("시작일"),
-    end_date: dateSchema("종료일"),
+    base_date: dateSchema("조회일자 (미입력시 오늘)").optional(),
     account_no: accountNoSchema,
   },
   { readOnlyHint: true },
-  async ({ start_date, end_date, account_no }) => {
+  async ({ base_date, account_no }) => {
     try {
       const acct = resolveAccountNo(account_no);
-      const data = await client.getTradeHistory(acct, start_date, end_date);
-      const output = data.output as Record<string, unknown>[] | undefined;
-
-      if (!output || output.length === 0) {
-        return textContent(
-          `${start_date} ~ ${end_date} 기간 체결 내역이 없습니다.`
-        );
-      }
-
-      let text = `## 체결 내역 (${start_date} ~ ${end_date})\n\n`;
-      text +=
-        "| 체결일 | 종목명 | 매매구분 | 체결수량 | 체결가격 | 체결금액 |\n";
-      text +=
-        "|--------|--------|---------|---------|---------|----------|\n";
-
-      for (const item of output) {
-        const date = item.exec_dt ?? item.trade_date ?? "-";
-        const name = item.stk_nm ?? item.stock_name ?? "-";
-        const side = item.buy_sell ?? item.side ?? "-";
-        const qty = item.exec_qty ?? item.trade_qty ?? "-";
-        const prc = item.exec_pr ?? item.trade_price ?? "-";
-        const amt = item.exec_amt ?? item.trade_amount ?? "-";
-        text += `| ${date} | ${name} | ${side} | ${qty} | ${formatCurrency(prc)} | ${formatCurrency(amt)} |\n`;
-      }
-
-      return textContent(text);
+      const data = await client.getTradeHistory(acct, base_date);
+      return textContent(formatTradeHistory(data));
     } catch (error) {
       return errorContent(formatError(error));
     }
   }
 );
 
-// 12. analyze_profit_loss
+// ─── 주문 Tools ──────────────────────────────────────────────
+
+// 9. place_buy_order - 매수주문 (kt10000)
+// trde_tp: 0:보통(지정가), 3:시장가
 server.tool(
-  "analyze_profit_loss",
-  "기간별 종목별 실현손익, 승률, 수익률을 자동 계산하여 분석합니다",
-  {
-    start_date: dateSchema("시작일"),
-    end_date: dateSchema("종료일"),
-    account_no: accountNoSchema,
-  },
-  { readOnlyHint: true },
-  async ({ start_date, end_date, account_no }) => {
-    try {
-      const acct = resolveAccountNo(account_no);
-      const data = await client.getTradeHistory(acct, start_date, end_date);
-      const output = data.output as Record<string, unknown>[] | undefined;
-
-      if (!output || output.length === 0) {
-        return textContent(
-          `${start_date} ~ ${end_date} 기간 거래 내역이 없어 분석할 수 없습니다.`
-        );
-      }
-
-      const stockMap = new Map<
-        string,
-        { name: string; totalProfit: number; count: number }
-      >();
-
-      for (const item of output) {
-        const code = String(item.stk_cd ?? item.stock_code ?? "unknown");
-        const name = String(item.stk_nm ?? item.stock_name ?? code);
-        const profit = Number(item.pl_amt ?? item.profit_loss ?? 0);
-
-        const existing = stockMap.get(code);
-        if (existing) {
-          existing.totalProfit += profit;
-          existing.count++;
-        } else {
-          stockMap.set(code, { name, totalProfit: profit, count: 1 });
-        }
-      }
-
-      let totalProfit = 0;
-      let winCount = 0;
-      let lossCount = 0;
-      let bestStock = { name: "", profit: -Infinity };
-      let worstStock = { name: "", profit: Infinity };
-
-      for (const [, info] of stockMap) {
-        totalProfit += info.totalProfit;
-        if (info.totalProfit >= 0) winCount++;
-        else lossCount++;
-        if (info.totalProfit > bestStock.profit) {
-          bestStock = { name: info.name, profit: info.totalProfit };
-        }
-        if (info.totalProfit < worstStock.profit) {
-          worstStock = { name: info.name, profit: info.totalProfit };
-        }
-      }
-
-      const totalTrades = winCount + lossCount;
-      const winRate =
-        totalTrades > 0
-          ? ((winCount / totalTrades) * 100).toFixed(1)
-          : "0";
-
-      let text = `## 손익 분석 (${start_date} ~ ${end_date})\n\n`;
-      text += `- 총 거래 종목: ${totalTrades}개\n`;
-      text += `- 수익 종목: ${winCount}개 / 손실 종목: ${lossCount}개\n`;
-      text += `- 승률: ${winRate}%\n`;
-      text += `- 총 실현손익: ${formatCurrency(totalProfit)}\n`;
-
-      if (bestStock.name) {
-        text += `- 최고 수익: ${bestStock.name} (${formatCurrency(bestStock.profit)})\n`;
-      }
-      if (worstStock.name && worstStock.profit !== Infinity) {
-        text += `- 최대 손실: ${worstStock.name} (${formatCurrency(worstStock.profit)})\n`;
-      }
-
-      text += `\n### 종목별 상세\n\n`;
-      text += "| 종목명 | 거래횟수 | 실현손익 |\n";
-      text += "|--------|---------|----------|\n";
-
-      const sorted = [...stockMap.entries()].sort(
-        (a, b) => b[1].totalProfit - a[1].totalProfit
-      );
-      for (const [, info] of sorted) {
-        text += `| ${info.name} | ${info.count}회 | ${formatCurrency(info.totalProfit)} |\n`;
-      }
-
-      return textContent(text);
-    } catch (error) {
-      return errorContent(formatError(error));
-    }
-  }
-);
-
-// ─── 주문 Tools (readOnlyHint: false) ───────────────────────
-
-function registerOrderTool(
-  name: string,
-  description: string,
-  trcode: string,
-  sideLabel: string
-) {
-  server.tool(
-    name,
-    description,
-    {
-      stock_code: stockCodeSchema,
-      quantity: z.number().int().positive().describe("주문 수량"),
-      price: z
-        .number()
-        .int()
-        .min(0)
-        .default(0)
-        .describe("주문 가격 (시장가일 경우 0)"),
-      order_type: z
-        .enum(["market", "limit"])
-        .default("market")
-        .describe("주문유형: market(시장가) 또는 limit(지정가)"),
-      account_no: accountNoSchema,
-    },
-    { readOnlyHint: false, idempotentHint: false },
-    async ({ stock_code, quantity, price, order_type, account_no }) => {
-      try {
-        const acct = resolveAccountNo(account_no);
-
-        if (order_type === "limit" && price <= 0) {
-          return errorContent(
-            "지정가 주문 시 가격을 0보다 큰 값으로 입력해주세요."
-          );
-        }
-
-        const data = await client.placeOrder(
-          trcode,
-          acct,
-          stock_code,
-          quantity,
-          price,
-          order_type
-        );
-
-        const orderNo = data.output?.ord_no ?? data.ord_no ?? "N/A";
-        const typeLabel =
-          order_type === "market"
-            ? "시장가"
-            : `지정가 ${formatCurrency(price)}`;
-
-        let text = `## ${sideLabel} 주문 완료\n\n`;
-        text += `- 주문번호: ${orderNo}\n`;
-        text += `- 종목코드: ${stock_code}\n`;
-        text += `- 주문유형: ${typeLabel}\n`;
-        text += `- 주문수량: ${quantity}주\n`;
-        if (IS_MOCK) text += "\n(모의투자 주문)\n";
-
-        return textContent(text);
-      } catch (error) {
-        return errorContent(formatError(error));
-      }
-    }
-  );
-}
-
-// 7. place_buy_order
-registerOrderTool(
   "place_buy_order",
   "주식 매수 주문을 실행합니다. 시장가 또는 지정가 매수를 지원합니다",
-  "kt10000",
-  "매수"
+  {
+    stock_code: stockCodeSchema,
+    quantity: z.number().int().positive().describe("주문 수량"),
+    price: z.number().int().min(0).default(0).describe("주문 가격 (시장가일 경우 0)"),
+    order_type: z.enum(["market", "limit"]).default("market").describe("주문유형: market(시장가) 또는 limit(지정가)"),
+    account_no: accountNoSchema,
+  },
+  { readOnlyHint: false, idempotentHint: false },
+  async ({ stock_code, quantity, price, order_type, account_no }) => {
+    try {
+      const acct = resolveAccountNo(account_no);
+      if (order_type === "limit" && price <= 0) {
+        return errorContent("지정가 주문 시 가격을 0보다 큰 값으로 입력해주세요.");
+      }
+      const data = await client.placeBuyOrder(acct, stock_code, quantity, price, order_type);
+      const orderNo = data.ord_no ?? "N/A";
+      const typeLabel = order_type === "market" ? "시장가" : `지정가 ${formatCurrency(price)}`;
+      let text = `## 매수 주문 완료\n\n`;
+      text += `- 주문번호: ${orderNo}\n`;
+      text += `- 종목코드: ${stock_code}\n`;
+      text += `- 주문유형: ${typeLabel}\n`;
+      text += `- 주문수량: ${quantity}주\n`;
+      if (IS_MOCK) text += "\n(모의투자 주문)\n";
+      return textContent(text);
+    } catch (error) {
+      return errorContent(formatError(error));
+    }
+  }
 );
 
-// 8. place_sell_order
-registerOrderTool(
+// 10. place_sell_order - 매도주문 (kt10001)
+server.tool(
   "place_sell_order",
   "주식 매도 주문을 실행합니다. 시장가 또는 지정가 매도를 지원합니다",
-  "kt10001",
-  "매도"
+  {
+    stock_code: stockCodeSchema,
+    quantity: z.number().int().positive().describe("주문 수량"),
+    price: z.number().int().min(0).default(0).describe("주문 가격 (시장가일 경우 0)"),
+    order_type: z.enum(["market", "limit"]).default("market").describe("주문유형: market(시장가) 또는 limit(지정가)"),
+    account_no: accountNoSchema,
+  },
+  { readOnlyHint: false, idempotentHint: false },
+  async ({ stock_code, quantity, price, order_type, account_no }) => {
+    try {
+      const acct = resolveAccountNo(account_no);
+      if (order_type === "limit" && price <= 0) {
+        return errorContent("지정가 주문 시 가격을 0보다 큰 값으로 입력해주세요.");
+      }
+      const data = await client.placeSellOrder(acct, stock_code, quantity, price, order_type);
+      const orderNo = data.ord_no ?? "N/A";
+      const typeLabel = order_type === "market" ? "시장가" : `지정가 ${formatCurrency(price)}`;
+      let text = `## 매도 주문 완료\n\n`;
+      text += `- 주문번호: ${orderNo}\n`;
+      text += `- 종목코드: ${stock_code}\n`;
+      text += `- 주문유형: ${typeLabel}\n`;
+      text += `- 주문수량: ${quantity}주\n`;
+      if (IS_MOCK) text += "\n(모의투자 주문)\n";
+      return textContent(text);
+    } catch (error) {
+      return errorContent(formatError(error));
+    }
+  }
 );
 
-// 10. cancel_order
+// 11. cancel_order - 취소주문 (kt10003)
+// cncl_qty: '0' 입력시 잔량 전부 취소
 server.tool(
   "cancel_order",
-  "주문번호로 미체결 주문을 취소합니다",
+  "원주문번호로 미체결 주문을 취소합니다. 수량을 0으로 입력하면 잔량 전부 취소",
   {
     original_order_no: z.string().describe("취소할 원주문번호"),
     stock_code: stockCodeSchema,
-    quantity: z.number().int().positive().describe("취소 수량"),
+    quantity: z.number().int().min(0).describe("취소 수량 (0 입력시 잔량 전부 취소)"),
     account_no: accountNoSchema,
   },
   { readOnlyHint: false, idempotentHint: false, destructiveHint: true },
   async ({ original_order_no, stock_code, quantity, account_no }) => {
     try {
       const acct = resolveAccountNo(account_no);
-      const data = await client.cancelOrder(
-        acct,
-        original_order_no,
-        stock_code,
-        quantity
-      );
-
-      const cancelNo = data.output?.ord_no ?? data.ord_no ?? "N/A";
-
+      const data = await client.cancelOrder(acct, original_order_no, stock_code, quantity);
       let text = `## 주문 취소 완료\n\n`;
-      text += `- 취소 주문번호: ${cancelNo}\n`;
+      text += `- 취소 주문번호: ${data.ord_no ?? "N/A"}\n`;
       text += `- 원주문번호: ${original_order_no}\n`;
       text += `- 종목코드: ${stock_code}\n`;
-      text += `- 취소수량: ${quantity}주\n`;
-
+      text += `- 취소수량: ${data.cncl_qty ?? quantity}주\n`;
       return textContent(text);
     } catch (error) {
       return errorContent(formatError(error));
@@ -834,11 +759,26 @@ server.tool(
 
 const MCP_TRANSPORT = (process.env.MCP_TRANSPORT ?? "stdio").toLowerCase();
 const MCP_PORT = Number(process.env.MCP_PORT ?? 3000);
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? "";
 
 async function main() {
   if (MCP_TRANSPORT === "http") {
+    if (!MCP_AUTH_TOKEN) {
+      console.error("HTTP 모드에서는 MCP_AUTH_TOKEN 환경변수가 필수입니다.");
+      process.exit(1);
+    }
+
     const app = express();
     app.use(express.json());
+
+    app.use("/mcp", (req, res, next) => {
+      const auth = req.headers.authorization;
+      if (auth !== `Bearer ${MCP_AUTH_TOKEN}`) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      next();
+    });
 
     app.post("/mcp", async (req, res) => {
       const transport = new StreamableHTTPServerTransport({

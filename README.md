@@ -75,7 +75,10 @@ KIWOOM_ACCOUNT_NO=계좌번호10자리
 KIWOOM_IS_MOCK=true
 MCP_TRANSPORT=http
 MCP_PORT=3000
+MCP_AUTH_TOKEN=여기에_토큰_입력
 ```
+
+> 토큰 생성: `openssl rand -hex 32`
 
 #### 2. Docker Compose로 실행
 
@@ -92,7 +95,10 @@ docker compose up -d --build
 {
   "mcpServers": {
     "kiwoom": {
-      "url": "http://서버IP:3000/mcp"
+      "url": "http://서버IP:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer 여기에_토큰_입력"
+      }
     }
   }
 }
@@ -108,6 +114,7 @@ docker compose up -d --build
 | `KIWOOM_IS_MOCK` | O | 모의투자 여부 (`true` / `false`) |
 | `MCP_TRANSPORT` | X | 전송 방식 (`stdio` 또는 `http`, 기본값: `stdio`) |
 | `MCP_PORT` | X | HTTP 모드 포트 (기본값: `3000`) |
+| `MCP_AUTH_TOKEN` | HTTP 모드 시 O | Bearer 인증 토큰 (`openssl rand -hex 32`로 생성) |
 
 ## 제공 도구 (12개)
 
